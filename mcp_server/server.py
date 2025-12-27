@@ -1,3 +1,20 @@
+"""
+Users Management MCP Server
+
+Exposes CRUD tools for user profile management via MCP (Model Context Protocol).
+Provides 5 tools (get, list, search, create, update, delete), 1 resource (flow diagram),
+and 2 prompts (search guidance, profile creation guidance) for AI agents to discover and use.
+
+RESPONSIBILITIES:
+- HTTP client (UserClient) wraps User Service REST API (Docker, port 8041)
+- Tool definitions: Async functions returning formatted strings (user data)
+- Resource: PNG image file (flow diagram of API endpoints)
+- Prompts: Domain-specific guidance for LLM (search and profile creation best practices)
+- Server transport: HTTP streams (streamable-http) for agent-server communication
+
+External dependency:
+- User Service (Docker: localhost:8041) - provides REST API for CRUD operations
+"""
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -5,51 +22,298 @@ from mcp.server.fastmcp import FastMCP
 from models.user_info import UserSearchRequest, UserCreate, UserUpdate
 from user_client import UserClient
 
-#TODO:
-# 1. Create instance of FastMCP as `mcp` (or another name if you wish) with:
-#       - name is "users-management-mcp-server",
-#       - host is "0.0.0.0",
-#       - port is 8005,
-# 2. Create UserClient
+
+# === MCP SERVER INITIALIZATION ===
+print("[MCP Server] Initializing...")
+# FastMCP server listens on 0.0.0.0:8005 for agent connections
+mcp = FastMCP(
+    name="users-management-mcp-server",
+    host="0.0.0.0",
+    port=8005
+)
+# UserClient wraps HTTP calls to User Service (Docker, port 8041)
+user_client = UserClient()
+print("[MCP Server] FastMCP and UserClient initialized.")
 
 
 # ==================== TOOLS ====================
-#TODO:
-# You need to add all the tools here. You will need to create 5 async methods and mark them as @mcp.tool() (if you
-# named FastMCP not as `mcp` then use the name that you have used). All tools return `str`.
-# Don't forget about tool description, it will LLM to identify when some particular tool should be used.
-# https://gofastmcp.com/servers/tools
-# ---
-# Tools:
-# 1. `get_user_by_id`:-
-# 2. `delete_user`:-
-# 3. `search_user`:-
-# 4. `add_user`:-
-# 5. `update_user`:-
+# MCP tools are async functions that return strings (formatted data for LLM)
+# Each tool will be discovered by agent and exposed for LLM tool calling
+
+@mcp.tool()
+async def get_user_by_id(user_id: int) -> str:
+    """
+    Retrieve a single user by ID.
+    
+    Args:
+        user_id: Unique user identifier (integer)
+        
+    Returns:
+        str: Formatted user data (all fields in code block)
+        
+    Error handling:
+        Raises if user not found (HTTP 404) or service unavailable
+    """
+    print(f"[TOOL] get_user_by_id called with user_id={user_id}")
+    return await user_client.get_user(user_id)
+
+@mcp.tool()
+async def delete_user(user_id: int) -> str:
+    """
+    Delete a user by ID.
+    
+    Args:
+        user_id: Unique user identifier to delete
+        
+    Returns:
+        str: Confirmation message "User successfully deleted"
+        
+    Error handling:
+        Raises if user not found or service unavailable
+    """
+    print(f"[TOOL] delete_user called with user_id={user_id}")
+    return await user_client.delete_user(user_id)
+
+@mcp.tool()
+async def search_user(
+    name: str = None,
+    surname: str = None,
+    email: str = None,
+    gender: str = None
+@mcp.tool()
+async def search_user(
+    name: str = None,
+    surname: str = None,
+    email: str = None,
+    gender: str = None
+) -> str:
+    """
+    Search for users by optional criteria (name, surname, email, gender).
+    
+    Supports partial matching (case-insensitive) for name/surname/email.
+    Gender uses exact matching (male, female, other, prefer_not_to_say).
+    
+    Args:
+        name: Partial first name match (e.g., 'john' finds John, Johnny, etc.)
+        surname: Partial last name match
+        email: Partial email match (e.g., 'gmail' finds all Gmail users)
+        gender: Exact gender match
+        
+    Returns:
+        str: Formatted list of matching users (can be empty)
+        
+    Notes:
+        - All parameters are optional; omit to ignore that criterion
+        - Returns count of found users in console for debugging
+    """
+    print(f"[TOOL] search_user called with name={name}, surname={surname}, email={email}, gender={gender}")
+    return await user_client.search_users(name=name, surname=surname, email=email, gender=gender)
+
+@mcp.tool()
+async def add_user(
+    name: str,
+    surname: str,
+    email: str,
+    about_me: str = None,
+    phone: str = None,
+    date_of_birth: str = None,
+    gender: str = None,
+    company: str = None,
+    salary: float = None,
+    country: str = None,
+    city: str = None,
+    street: str = None,
+    flat_house: str = None,
+    credit_card_num: str = None,
+    credit_card_cvv: str = None,
+    credit_card_exp_date: str = None
+) -> str:
+    """
+    Create a new user with provided data.
+    
+    Required fields: name, surname, email
+    Optional fields: about_me, phone, address, company, salary, date_of_birth, gender, credit card
+    
+    Args:
+        name: First name (2-50 characters, letters only)
+        surname: Last name (2-50 characters, letters only)
+        email: Unique email address (must be unique in system)
+        about_me: Biography/description (rich text, 0+ characters)
+        phone: Phone number (E.164 format preferred: +1234567890)
+        date_of_birth: Birth date (YYYY-MM-DD format)
+        gender: Gender (male, female, other, prefer_not_to_say)
+        company: Company name
+        salary: Annual salary (USD, realistic range: $30k-$200k)
+        country, city, street, flat_house: Complete address
+        credit_card_num: Card number (XXXX-XXXX-XXXX-XXXX, non-functional test data)
+        credit_card_cvv: 3-digit CVV
+        credit_card_exp_date: Expiration (MM/YYYY, must be future date)
+        
+    Returns:
+        str: Confirmation message with user data (HTTP 201 Created)
+        
+    Error handling:
+        Raises if email already exists or service unavailable
+    """
+    print(f"[TOOL] add_user called with email={email}")
+    from models.user_info import UserCreate
+    user = UserCreate(
+        name=name,
+        surname=surname,
+        email=email,
+        about_me=about_me,
+        phone=phone,
+        date_of_birth=date_of_birth,
+        gender=gender,
+        company=company,
+        salary=salary,
+        country=country,
+        city=city,
+        street=street,
+        flat_house=flat_house,
+        credit_card_num=credit_card_num,
+        credit_card_cvv=credit_card_cvv,
+        credit_card_exp_date=credit_card_exp_date
+    )
+    return await user_client.add_user(user)
+
+@mcp.tool()
+async def update_user(
+    user_id: int,
+    name: str = None,
+    surname: str = None,
+    email: str = None,
+    about_me: str = None,
+    phone: str = None,
+    date_of_birth: str = None,
+    gender: str = None,
+    company: str = None,
+    salary: float = None,
+    country: str = None,
+    city: str = None,
+    street: str = None,
+    flat_house: str = None,
+    credit_card_num: str = None,
+    credit_card_cvv: str = None,
+    credit_card_exp_date: str = None
+) -> str:
+    """
+    Update an existing user by ID. Only provided fields are updated (PATCH semantics).
+    
+    Args:
+        user_id: ID of user to update
+        All other args: Same as add_user, but optional (only updates provided fields)
+        
+    Returns:
+        str: Confirmation message with updated user data (HTTP 201)
+        
+    Error handling:
+        Raises if user not found (HTTP 404) or service unavailable
+    """
+    print(f"[TOOL] update_user called for user_id={user_id}")
+    from models.user_info import UserUpdate
+    user = UserUpdate(
+        name=name,
+        surname=surname,
+        email=email,
+        about_me=about_me,
+        phone=phone,
+        date_of_birth=date_of_birth,
+        gender=gender,
+        company=company,
+        salary=salary,
+        country=country,
+        city=city,
+        street=street,
+        flat_house=flat_house,
+        credit_card_num=credit_card_num,
+        credit_card_cvv=credit_card_cvv,
+        credit_card_exp_date=credit_card_exp_date
+    )
+    return await user_client.update_user(user_id, user)
 
 # ==================== MCP RESOURCES ====================
+# Resources are static assets (images, docs, etc.) that agents can retrieve
+# Not all servers have resources; this one provides a flow diagram
 
-#TODO:
-# Provides screenshot with Swagger endpoints of User Service. We need for the case to show you that MCP servers can
-# provide some static resources.
-# https://gofastmcp.com/servers/resources
-# ---
-# 1. Create async method `get_flow_diagram` that returns bytes and mark as `@mcp.resource` with:
-#   - uri = "users-management://flow-diagram"
-#   - mime_type="image/png"
-# 2. You need to get `flow.png` picture from `mcp_server` folder and return it as bytes.
-# 3. Don't forget to provide resource description
+@mcp.resource(uri="users-management://flow-diagram", mime_type="image/png")
+async def get_flow_diagram() -> bytes:
+    """
+    Retrieve a PNG image of the User Service API flow (Swagger screenshot).
+    
+    Resource URI: users-management://flow-diagram
+    MIME type: image/png (binary content)
+    
+    Returns:
+        bytes: PNG image data loaded from flow.png file
+        
+    Notes:
+        - File must exist at mcp_server/flow.png
+        - Useful for showing API endpoints available in User Service
+    """
+    print("[RESOURCE] get_flow_diagram called, returning flow.png bytes.")
+    flow_path = Path(__file__).parent / "flow.png"
+    with open(flow_path, "rb") as f:
+        return f.read()
 
 
 # ==================== MCP PROMPTS ====================
+# Prompts provide domain-specific guidance to LLM clients
+# These are discoverable by agents and can be included in message history
 
-#TODO:
-# Provides static prompts that can be used by Clients
-# https://gofastmcp.com/servers/prompts
-# ---
-# Prompts are prepared, you need just properly return them and provide descriptions of them"
+@mcp.prompt()
+async def search_helper_prompt() -> str:
+    """
+    Provide guidance for formulating effective user search queries.
+    
+    This prompt is included in agent message history to guide LLM on:
+    - Available search fields (name, surname, email, gender)
+    - Partial matching semantics (case-insensitive)
+    - Example search patterns and combinations
+    - Best practices for targeted searches
+    
+    Returns:
+        str: Multi-line guidance text for LLM
+    """
+    return (
+        "You are helping users search through a dynamic user database. The database contains "
+        "realistic synthetic user profiles with the following searchable fields:\n"
+        "\n## Available Search Parameters\n"
+        "- **name**: First name (partial matching, case-insensitive)\n"
+        "- **surname**: Last name (partial matching, case-insensitive)\n"
+        "- **email**: Email address (partial matching, case-insensitive)\n"
+        "- **gender**: Exact match (male, female, other, prefer_not_to_say)\n"
+        "\n## Search Strategy Guidance\n"
+        "... (see README for full text) ..."
+    )
 
-# Helps users formulate effective search queries
+@mcp.prompt()
+async def profile_creator_prompt() -> str:
+    """
+    Provide guidance for creating realistic user profiles.
+    
+    This prompt is included in agent message history to guide LLM on:
+    - Required fields (name, surname, email, about_me)
+    - Optional fields (phone, date_of_birth, address, company, credit card)
+    - Data validation rules (format, constraints, uniqueness)
+    - Realistic value ranges (salary, age distribution)
+    - Cultural sensitivity and diversity best practices
+    
+    Returns:
+        str: Multi-line guidance text for LLM
+    """
+    return (
+        "You are helping create realistic user profiles for the system. Follow these guidelines "
+        "to ensure data consistency and realism.\n"
+        "\n## Required Fields\n"
+        "- **name**: 2-50 characters, letters only, culturally appropriate\n"
+        "- **surname**: 2-50 characters, letters only  \n"
+        "- **email**: Valid format, must be unique in system\n"
+        "- **about_me**: Rich, realistic biography (see guidelines below)\n"
+        "... (see README for full text) ..."
+    )
+
+# Reference text (kept for documentation, not returned as prompt)
 """
 You are helping users search through a dynamic user database. The database contains 
 realistic synthetic user profiles with the following searchable fields:
@@ -174,7 +438,23 @@ When creating profiles, aim for diversity in:
 """
 
 
+# ==================== SERVER ENTRY POINT ====================
 if __name__ == "__main__":
-    #TODO:
-    # Run server with `transport="streamable-http"`
-    raise NotImplementedError()
+    """
+    Start the MCP server.
+    
+    FLOW:
+    1. FastMCP server binds to 0.0.0.0:8005
+    2. Uses streamable-http transport (bidirectional HTTP streams)
+    3. Agents connect via MCPClient and discover tools/resources/prompts
+    4. Server handles concurrent tool calls via async functions
+    5. Blocks until process terminated (SIGTERM/SIGINT)
+    
+    Prerequisites:
+    - User Service running on localhost:8041 (docker-compose up -d)
+    
+    To stop: Ctrl+C or systemctl stop
+    """
+    print("[MCP Server] Starting server on 0.0.0.0:8005 with streamable-http transport...")
+    mcp.run(transport="streamable-http")
+    print("[MCP Server] Server stopped.")

@@ -16,10 +16,11 @@ External dependency:
 - User Service (Docker: localhost:8041) - provides REST API for CRUD operations
 """
 from pathlib import Path
+from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from models.user_info import UserSearchRequest, UserCreate, UserUpdate
+from models.user_info import UserSearchRequest, UserCreate, UserUpdate, Address, CreditCard
 from user_client import UserClient
 
 
@@ -76,16 +77,10 @@ async def delete_user(user_id: int) -> str:
 
 @mcp.tool()
 async def search_user(
-    name: str = None,
-    surname: str = None,
-    email: str = None,
-    gender: str = None
-@mcp.tool()
-async def search_user(
-    name: str = None,
-    surname: str = None,
-    email: str = None,
-    gender: str = None
+    name: Optional[str] = None,
+    surname: Optional[str] = None,
+    email: Optional[str] = None,
+    gender: Optional[str] = None
 ) -> str:
     """
     Search for users by optional criteria (name, surname, email, gender).
@@ -114,25 +109,20 @@ async def add_user(
     name: str,
     surname: str,
     email: str,
-    about_me: str = None,
-    phone: str = None,
-    date_of_birth: str = None,
-    gender: str = None,
-    company: str = None,
-    salary: float = None,
-    country: str = None,
-    city: str = None,
-    street: str = None,
-    flat_house: str = None,
-    credit_card_num: str = None,
-    credit_card_cvv: str = None,
-    credit_card_exp_date: str = None
+    about_me: str,
+    phone: Optional[str] = None,
+    date_of_birth: Optional[str] = None,
+    gender: Optional[str] = None,
+    company: Optional[str] = None,
+    salary: Optional[float] = None,
+    address: Optional[dict] = None,
+    credit_card: Optional[dict] = None
 ) -> str:
     """
     Create a new user with provided data.
     
-    Required fields: name, surname, email
-    Optional fields: about_me, phone, address, company, salary, date_of_birth, gender, credit card
+    Required fields: name, surname, email, about_me
+    Optional fields: phone, address, company, salary, date_of_birth, gender, credit card
     
     Args:
         name: First name (2-50 characters, letters only)
@@ -144,10 +134,8 @@ async def add_user(
         gender: Gender (male, female, other, prefer_not_to_say)
         company: Company name
         salary: Annual salary (USD, realistic range: $30k-$200k)
-        country, city, street, flat_house: Complete address
-        credit_card_num: Card number (XXXX-XXXX-XXXX-XXXX, non-functional test data)
-        credit_card_cvv: 3-digit CVV
-        credit_card_exp_date: Expiration (MM/YYYY, must be future date)
+        address: Complete address (country, city, street, flat_house)
+        credit_card: Credit card information (num, cvv, exp_date)
         
     Returns:
         str: Confirmation message with user data (HTTP 201 Created)
@@ -156,7 +144,9 @@ async def add_user(
         Raises if email already exists or service unavailable
     """
     print(f"[TOOL] add_user called with email={email}")
-    from models.user_info import UserCreate
+    address_obj = Address(**address) if address else None
+    credit_card_obj = CreditCard(**credit_card) if credit_card else None
+
     user = UserCreate(
         name=name,
         surname=surname,
@@ -167,35 +157,24 @@ async def add_user(
         gender=gender,
         company=company,
         salary=salary,
-        country=country,
-        city=city,
-        street=street,
-        flat_house=flat_house,
-        credit_card_num=credit_card_num,
-        credit_card_cvv=credit_card_cvv,
-        credit_card_exp_date=credit_card_exp_date
+        address=address_obj,
+        credit_card=credit_card_obj
     )
     return await user_client.add_user(user)
 
 @mcp.tool()
 async def update_user(
     user_id: int,
-    name: str = None,
-    surname: str = None,
-    email: str = None,
-    about_me: str = None,
-    phone: str = None,
-    date_of_birth: str = None,
-    gender: str = None,
-    company: str = None,
-    salary: float = None,
-    country: str = None,
-    city: str = None,
-    street: str = None,
-    flat_house: str = None,
-    credit_card_num: str = None,
-    credit_card_cvv: str = None,
-    credit_card_exp_date: str = None
+    name: Optional[str] = None,
+    surname: Optional[str] = None,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    date_of_birth: Optional[str] = None,
+    gender: Optional[str] = None,
+    company: Optional[str] = None,
+    salary: Optional[float] = None,
+    address: Optional[dict] = None,
+    credit_card: Optional[dict] = None
 ) -> str:
     """
     Update an existing user by ID. Only provided fields are updated (PATCH semantics).
@@ -211,26 +190,22 @@ async def update_user(
         Raises if user not found (HTTP 404) or service unavailable
     """
     print(f"[TOOL] update_user called for user_id={user_id}")
-    from models.user_info import UserUpdate
-    user = UserUpdate(
+    address_obj = Address(**address) if address else None
+    credit_card_obj = CreditCard(**credit_card) if credit_card else None
+
+    user_update = UserUpdate(
         name=name,
         surname=surname,
         email=email,
-        about_me=about_me,
         phone=phone,
         date_of_birth=date_of_birth,
         gender=gender,
         company=company,
         salary=salary,
-        country=country,
-        city=city,
-        street=street,
-        flat_house=flat_house,
-        credit_card_num=credit_card_num,
-        credit_card_cvv=credit_card_cvv,
-        credit_card_exp_date=credit_card_exp_date
+        address=address_obj,
+        credit_card=credit_card_obj
     )
-    return await user_client.update_user(user_id, user)
+    return await user_client.update_user(user_id, user_update)
 
 # ==================== MCP RESOURCES ====================
 # Resources are static assets (images, docs, etc.) that agents can retrieve
@@ -445,7 +420,7 @@ if __name__ == "__main__":
     
     FLOW:
     1. FastMCP server binds to 0.0.0.0:8005
-    2. Uses streamable-http transport (bidirectional HTTP streams)
+    2. Uses streamable-http transport for bidirectional communication
     3. Agents connect via MCPClient and discover tools/resources/prompts
     4. Server handles concurrent tool calls via async functions
     5. Blocks until process terminated (SIGTERM/SIGINT)
@@ -456,5 +431,5 @@ if __name__ == "__main__":
     To stop: Ctrl+C or systemctl stop
     """
     print("[MCP Server] Starting server on 0.0.0.0:8005 with streamable-http transport...")
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http", mount_path="/mcp")
     print("[MCP Server] Server stopped.")

@@ -14,6 +14,7 @@ RESPONSIBILITIES:
 - Error handling: Graceful fallbacks for optional MCP features (resources, prompts)
 """
 from typing import Optional, Any
+from contextlib import AsyncExitStack
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -31,8 +32,7 @@ class MCPClient:
     Attributes:
         mcp_server_url (str): Base URL of the MCP server (e.g., http://localhost:8005/mcp)
         session (Optional[ClientSession]): Active MCP session; None until __aenter__ is called
-        _streams_context: Underlying HTTP stream context manager
-        _session_context: ClientSession context manager for cleanup
+        _exit_stack: Async context stack for managing nested context managers
     """
 
     def __init__(self, mcp_server_url: str) -> None:
@@ -44,8 +44,7 @@ class MCPClient:
         """
         self.mcp_server_url = mcp_server_url
         self.session: Optional[ClientSession] = None
-        self._streams_context = None
-        self._session_context = None
+        self._exit_stack = AsyncExitStack()
 
     async def __aenter__(self):
         """
@@ -65,16 +64,30 @@ class MCPClient:
             RuntimeError: If initialization handshake fails
         """
         print(f"[MCPClient] Connecting to MCP server at {self.mcp_server_url} ...")
-        # Create HTTP stream transport (handles bidirectional communication)
-        self._streams_context = streamablehttp_client(self.mcp_server_url)
-        read_stream, write_stream, _ = await self._streams_context.__aenter__()
-        # Wrap streams in MCP ClientSession for protocol handling
-        self._session_context = ClientSession(read_stream, write_stream)
-        self.session = await self._session_context.__aenter__()
-        # Exchange capabilities with server (validates protocol version, etc.)
-        capabilities = await self.session.initialize()
-        print(f"[MCPClient] Connected. Capabilities: {capabilities}")
-        return self
+        try:
+            # Enter the exit stack context
+            await self._exit_stack.__aenter__()
+            
+            # Create HTTP stream transport with exit stack management
+            # This ensures proper cleanup of the async generator
+            read_stream, write_stream, _ = await self._exit_stack.enter_async_context(
+                streamablehttp_client(self.mcp_server_url)
+            )
+            
+            # Wrap streams in MCP ClientSession for protocol handling
+            self.session = await self._exit_stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            
+            # Exchange capabilities with server (validates protocol version, etc.)
+            capabilities = await self.session.initialize()
+            print(f"[MCPClient] Connected. Capabilities: {capabilities}")
+            return self
+        except Exception as e:
+            print(f"[MCPClient] Connection failed: {e}")
+            # Clean up the exit stack on error
+            await self._exit_stack.__aexit__(type(e), e, e.__traceback__)
+            raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """
@@ -84,13 +97,13 @@ class MCPClient:
         Logs cleanup progress for debugging.
         """
         print("[MCPClient] Shutting down MCP client...")
-        if self.session and self._session_context:
-
-            await self._session_context.__aexit__(exc_type, exc_val, exc_tb)
-            print("[MCPClient] Session context closed.")
-        if self._streams_context:
-            await self._streams_context.__aexit__(exc_type, exc_val, exc_tb)
-            print("[MCPClient] Streams context closed.")
+        try:
+            await self._exit_stack.__aexit__(exc_type, exc_val, exc_tb)
+            print("[MCPClient] All contexts closed.")
+        except Exception as e:
+            print(f"[MCPClient] Warning: Error during cleanup: {type(e).__name__}")
+            # Don't propagate cleanup errors - allow the main exception to surface
+            return False
 
     async def get_tools(self) -> list[dict[str, Any]]:
         """
@@ -109,7 +122,8 @@ class MCPClient:
         """
         if not self.session:
             raise RuntimeError("MCP client not connected. Call connect() first.")
-        tools = await self.session.list_tools()
+        result = await self.session.list_tools()
+        tools = result.tools
         print(f"[MCPClient] Discovered {len(tools)} tools.")
         # Transform MCP tool format to DIAL (OpenAI function calling) format
         dial_tools = []
@@ -148,9 +162,14 @@ class MCPClient:
         """
         if not self.session:
             raise RuntimeError("MCP client not connected. Call connect() first.")
-        # Call tool and get response (CallToolResult is list of content blocks)
+        # Call tool and get response (CallToolResult contains list of content blocks)
         tool_result: CallToolResult = await self.session.call_tool(tool_name, tool_args)
-        content = tool_result[0]
+        # CallToolResult is a list of content items; get the first one
+        if isinstance(tool_result, list) and len(tool_result) > 0:
+            content = tool_result[0]
+        else:
+            # Fallback if result is not subscriptable
+            content = tool_result
         print(f"    ⚙️: {content}\n")
         # Extract text from TextContent wrapper, or return raw content
         if isinstance(content, TextContent):
@@ -172,7 +191,9 @@ class MCPClient:
             raise RuntimeError("MCP client not connected.")
         try:
             # Attempt to discover resources (optional MCP feature)
-            resources = await self.session.list_resources()
+            result = await self.session.list_resources()
+            # result.resources is the list; result is ListResourcesResult object
+            resources = result.resources if hasattr(result, 'resources') else result
             print(f"[MCPClient] Discovered {len(resources)} resources.")
             return resources
         except Exception as e:
@@ -222,7 +243,9 @@ class MCPClient:
             raise RuntimeError("MCP client not connected.")
         try:
             # Attempt to discover prompts (optional MCP feature)
-            prompts = await self.session.list_prompts()
+            result = await self.session.list_prompts()
+            # result.prompts is the list; result is ListPromptsResult object
+            prompts = result.prompts if hasattr(result, 'prompts') else result
             print(f"[MCPClient] Discovered {len(prompts)} prompts.")
             return prompts
         except Exception as e:

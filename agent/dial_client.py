@@ -47,6 +47,9 @@ class DialClient:
         """
         self.tools = tools
         self.mcp_client = mcp_client
+        # Initialize Azure OpenAI client with provided credentials
+        # Default model: gpt-4o (must be deployed in Azure OpenAI instance)
+        print(f"[DialClient] Initializing with endpoint: {endpoint}")
         self.openai = AsyncAzureOpenAI(
             api_key=api_key,
             azure_endpoint=endpoint,

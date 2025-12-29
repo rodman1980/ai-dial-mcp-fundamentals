@@ -52,7 +52,7 @@ async def main():
     # Configuration: MCP server and DIAL API endpoints
     mcp_server_url = "http://localhost:8005/mcp"
     dial_api_key = os.environ.get("DIAL_API_KEY")
-    dial_endpoint = os.environ.get("DIAL_API_ENDPOINT", "https://YOUR_AZURE_OPENAI_ENDPOINT")
+    dial_endpoint = os.environ.get("DIAL_API_ENDPOINT", "https://ai-proxy.lab.epam.com")
 
     # STEP 1: Connect to MCP server (async context manager ensures cleanup on exit)
     async with MCPClient(mcp_server_url) as mcp_client:
@@ -114,7 +114,9 @@ async def main():
             except Exception as e:
                 # Error handling: log issue but don't crash loop - user can retry
                 # This allows recovery from transient API failures or network issues
-                print(f"[App] Error: {e}")
+                import traceback
+                print(f"[App] Error: {type(e).__name__}: {e}")
+                traceback.print_exc()
 
 
 if __name__ == "__main__":
